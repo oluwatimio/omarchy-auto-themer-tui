@@ -1,0 +1,178 @@
+#!/bin/bash
+
+set -euo pipefail
+
+# Standalone TUI for configuring and controlling the Auto Theme switcher.
+# This version is self-contained and works even outside the Omarchy repo.
+
+USER_CONFIG="$HOME/.config/auto-themer/theme-auto.conf"
+DEFAULT_CONFIG="$HOME/.local/share/omarchy/config/auto-themer/theme-auto.conf"
+
+# Prefer a user-installed backend to decouple from repo branch
+if [[ -x "$HOME/.local/bin/omarchy-theme-auto" ]]; then
+  AUTO_BACKEND="$HOME/.local/bin/omarchy-theme-auto"
+else
+  AUTO_BACKEND="omarchy-theme-auto"
+fi
+
+require_cmd() {
+  if ! command -v "$1" &>/dev/null; then
+    echo "Missing dependency: $1" >&2
+    exit 1
+  fi
+}
+
+open_editor() {
+  if command -v omarchy-launch-editor &>/dev/null; then
+    omarchy-launch-editor "$1"
+  elif [[ -n "${EDITOR:-}" ]]; then
+    "$EDITOR" "$1"
+  elif command -v nano &>/dev/null; then
+    nano "$1"
+  else
+    echo "Please edit $1 to change settings." >&2
+  fi
+}
+
+ensure_units() {
+  systemctl --user daemon-reload >/dev/null 2>&1 || true
+}
+
+enable_units() {
+  systemctl --user enable --now omarchy-theme-auto.timer >/dev/null 2>&1 || true
+  systemctl --user enable --now omarchy-theme-auto.path >/dev/null 2>&1 || true
+}
+
+disable_units() {
+  systemctl --user disable --now omarchy-theme-auto.timer >/dev/null 2>&1 || true
+  systemctl --user disable --now omarchy-theme-auto.path >/dev/null 2>&1 || true
+}
+
+get_val() {
+  local key="$1"
+  [[ -f "$USER_CONFIG" ]] || return 0
+  grep -E "^${key}=" "$USER_CONFIG" | tail -n1 | cut -d= -f2-
+}
+
+set_val() {
+  local key="$1" val="$2"
+  mkdir -p "$(dirname "$USER_CONFIG")"
+  if grep -qE "^${key}=" "$USER_CONFIG" 2>/dev/null; then
+    sed -i "s|^${key}=.*|${key}=${val}|" "$USER_CONFIG"
+  else
+    echo "${key}=${val}" >>"$USER_CONFIG"
+  fi
+}
+
+slugify() {
+  echo "$1" | sed -E 's/<[^>]+>//g' | tr '[:upper:]' '[:lower:]' | tr ' ' '-'
+}
+
+titleize() {
+  echo "$1" | sed -E 's/(^|-)([a-z])/\1\U\2/g; s/-/ /g'
+}
+
+theme_list() {
+  if command -v omarchy-theme-list &>/dev/null; then
+    omarchy-theme-list
+  else
+    # Fallback to listing theme directories
+    find "$HOME/.config/omarchy/themes/" -mindepth 1 -maxdepth 1 \( -type d -o -type l \) 2>/dev/null | sort | while read -r p; do
+      basename "$p" | titleize
+    done
+  fi
+}
+
+pick_theme() {
+  local which="$1"
+  local current_slug="$(get_val "$which")"
+  local preselect="$(titleize "$current_slug")"
+  local selected
+  selected=$(theme_list | gum choose --header "Select ${which} theme" ${preselect:+--selected "$preselect"} || true)
+  [[ -z "$selected" ]] && return 0
+  set_val "$which" "$(slugify "$selected")"
+}
+
+pick_time() {
+  local which="$1"
+  local current="$(get_val "$which")"
+  local choice
+  choice=$(printf "%s\n" "Custom (edit file)" "00:00" "00:15" "00:30" "00:45" \
+    $(for h in $(seq -w 01 23); do echo "$h:00" "$h:15" "$h:30" "$h:45"; done) \
+    | gum choose --header "Select ${which} (HH:MM)" ${current:+--selected "$current"} || true)
+  [[ -z "$choice" ]] && return 0
+  if [[ "$choice" == "Custom (edit file)" ]]; then
+    open_editor "$USER_CONFIG"
+    return 0
+  fi
+  if [[ ! "$choice" =~ ^[0-9]{2}:[0-9]{2}$ ]]; then
+    gum style --foreground 1 "Invalid time: $choice (expected HH:MM)"
+    return 1
+  fi
+  set_val "$which" "$choice"
+}
+
+apply_now() {
+  "$AUTO_BACKEND" apply || true
+}
+
+show_status() {
+  local out
+  out=$("$AUTO_BACKEND" status || true)
+  if command -v gum &>/dev/null; then
+    echo "$out" | gum pager
+  else
+    echo "$out"
+  fi
+}
+
+toggle_enabled() {
+  local enabled
+  enabled=$(get_val ENABLED)
+  if [[ "$enabled" == "true" ]]; then
+    set_val ENABLED false
+  else
+    set_val ENABLED true
+    enable_units
+    apply_now
+  fi
+}
+
+require_cmd gum
+ensure_units
+
+while true; do
+  enabled=$(get_val ENABLED)
+  light_title=$(titleize "$(get_val LIGHT_THEME)")
+  dark_title=$(titleize "$(get_val DARK_THEME)")
+  day=$(get_val DAY_START); [[ -z "$day" ]] && day=07:00
+  night=$(get_val NIGHT_START); [[ -z "$night" ]] && night=19:00
+
+  choice=$(printf "%s\n" \
+    "Toggle Auto Switch (current: ${enabled:-false})" \
+    "Set Light Theme (current: ${light_title:-unset})" \
+    "Set Dark Theme (current: ${dark_title:-unset})" \
+    "Set Day Start (current: $day)" \
+    "Set Night Start (current: $night)" \
+    "Apply Now" \
+    "Show Status" \
+    "Enable Timer + Watcher" \
+    "Disable Timer + Watcher" \
+    "Edit Config" \
+    "Exit" | gum choose --header "Auto Theme" || true)
+
+  case "$choice" in
+    "Toggle Auto Switch"*) toggle_enabled ;;
+    "Set Light Theme"*)    pick_theme LIGHT_THEME ;;
+    "Set Dark Theme"*)     pick_theme DARK_THEME ;;
+    "Set Day Start"*)      pick_time DAY_START ;;
+    "Set Night Start"*)    pick_time NIGHT_START ;;
+    "Apply Now")           apply_now ;;
+    "Show Status")         show_status ;;
+    "Enable Timer + Watcher")  enable_units ;;
+    "Disable Timer + Watcher") disable_units ;;
+    "Edit Config")         open_editor "$USER_CONFIG" ;;
+    "Exit"|"")            exit 0 ;;
+  esac
+done
+

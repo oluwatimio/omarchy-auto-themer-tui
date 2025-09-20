@@ -1,0 +1,11 @@
+[Unit]
+Description=Watch auto-theme config and apply on change (Standalone)
+
+[Path]
+PathModified=%h/.local/share/omarchy/config/auto-themer/theme-auto.conf
+PathModified=%h/.config/auto-themer/theme-auto.conf
+Unit=omarchy-theme-auto.service
+
+[Install]
+WantedBy=default.target
+

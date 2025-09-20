@@ -1,0 +1,12 @@
+[Unit]
+Description=Omarchy Auto Theme Switch Timer (Standalone)
+Requires=omarchy-theme-auto.service
+
+[Timer]
+OnBootSec=1min
+OnCalendar=minutely
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+
