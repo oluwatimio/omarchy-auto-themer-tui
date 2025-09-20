@@ -56,12 +56,32 @@ if [[ -z "$TERMINAL_BIN" ]]; then
   else TERMINAL_BIN=xterm; fi
 fi
 
+
+# Build Exec command appropriate for the terminal
+case "$TERMINAL_BIN" in
+  alacritty)
+    EXEC_CMD="$TERMINAL_BIN --class TUI.float -e $APP_BIN"
+    ;;
+  kitty)
+    EXEC_CMD="$TERMINAL_BIN --class TUI.float -e $APP_BIN"
+    ;;
+  wezterm)
+    EXEC_CMD="$TERMINAL_BIN start --class TUI.float -- $APP_BIN"
+    ;;
+  ghostty)
+    EXEC_CMD="$TERMINAL_BIN -e $APP_BIN"
+    ;;
+  *)
+    EXEC_CMD="$TERMINAL_BIN -e $APP_BIN"
+    ;;
+esac
+
 cat >"$DESKTOP_FILE" <<EOF
 [Desktop Entry]
 Version=1.0
 Name=$APP_NAME
 Comment=Configure automatic day/night theme switching
-Exec=$TERMINAL_BIN --class TUI.float -e $APP_BIN
+Exec=$EXEC_CMD
 Terminal=false
 Type=Application
 Icon=$ICON_DST
